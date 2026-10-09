@@ -36,6 +36,8 @@ import { claimDesktopSingleInstance } from './single-instance.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
 import { DesktopCommandManager } from './command-management.ts'
 import { serveWebDocument, authenticateWebHost, forwardWebRequest } from './web-document.ts'
+import { attachRemoteTarget } from './backend-target.ts'
+import type { DesktopBackendStatus, DesktopBackendTarget } from './ipc.ts'
 import { DesktopFatalRecovery } from './fatal-recovery.ts'
 import { pruneCrashReports, RendererConsoleTail, writeCrashReport, type CrashReportSource } from './crash-report.ts'
 import { openWelcomeWindow } from './welcome-window.ts'
@@ -397,10 +399,17 @@ async function main(): Promise<void> {
   })
   const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
   const applicationUrl = `${SCHEME}://app/`
-  let hostUrl: string | undefined
-  let hostCookie: string | undefined
-  const browserGuests = new DesktopBrowserGuests(() => hostUrl)
-  let injections: readonly unknown[] = []
+  /**
+   * Host spawned by this shell. It stays alive, and keeps owning the plugin
+   * that carries a remote tunnel, even while a remote target is attached.
+   */
+  let localBackend: DesktopBackendTarget | undefined
+  /** Remote Host the window was pointed at, while one is attached. */
+  let remoteBackend: DesktopBackendTarget | undefined
+  /** The target every application request, stream, and boot handover reads. */
+  const activeBackend = (): DesktopBackendTarget | undefined => remoteBackend ?? localBackend
+  const browserGuests = new DesktopBrowserGuests(() => activeBackend()?.url)
+  let backendSwitch: Promise<void> = Promise.resolve()
   let welcomeBackend: DesktopWelcomeBackend | undefined
   let reportedLaunch = false
   let analyticsEnabled = false
@@ -448,10 +457,9 @@ async function main(): Promise<void> {
     return {
       start: async () => {
         const ready = await host.start()
-        hostCookie = await authenticateWebHost(ready.url)
-        hostUrl = ready.url
+        const cookie = await authenticateWebHost(ready.url)
         if (ready.injections === undefined) throw new Error('Desktop Host did not provide boot injections')
-        injections = ready.injections
+        localBackend = { url: ready.url, cookie, injections: ready.injections, version: desktopClientVersion() }
         welcomeBackend = await connectDesktopWelcome(ready.url, (input, init) => net.fetch(input, init), async () => (await session.defaultSession.cookies.get({ url: ready.url })).map(cookie => `${cookie.name}=${cookie.value}`).join('; '))
         analyticsEnabled = await welcomeBackend.analyticsEnabled().catch(() => false)
         if (!reportedLaunch) { reportedLaunch = true; void track('desktop_app_launch', {}) }
@@ -668,10 +676,11 @@ async function main(): Promise<void> {
         || ['/favicon.svg', '/manifest.webmanifest'].includes(url.pathname)) {
         return serveWebDocument(request, join(resources.dsh, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist'))
       }
-      if (backend.host === undefined || hostUrl === undefined || hostCookie === undefined) {
+      const active = activeBackend()
+      if (backend.host === undefined || active === undefined) {
         return Promise.resolve(new Response(null, { status: 503 }))
       }
-      return forwardWebRequest(request, hostUrl, hostCookie)
+      return forwardWebRequest(request, active.url, active.cookie)
     }
     return Promise.resolve(new Response(null, { status: 404 }))
   })
@@ -685,8 +694,79 @@ async function main(): Promise<void> {
   ipcMain.handle(DESKTOP_IPC.boot, async (event) => {
     assertDesktopSender(event, ['app'])
     await startup
-    if (backend.host === undefined || hostUrl === undefined) throw new Error('Desktop Host is unavailable')
-    return { injections, streamBaseUrl: new URL(hostUrl).origin }
+    const active = activeBackend()
+    if (backend.host === undefined || active === undefined) throw new Error('Desktop Host is unavailable')
+    return { injections: active.injections, streamBaseUrl: new URL(active.url).origin }
+  })
+
+  /** Publish the current backend selection to the product UI. */
+  const backendStatus = (): DesktopBackendStatus => remoteBackend === undefined
+    ? { mode: 'local' }
+    : { mode: 'remote', label: remoteBackend.label ?? remoteBackend.url, version: remoteBackend.version ?? null }
+
+  /**
+   * Reload the application document so it boots against the current target:
+   * boot injections, upstream origin, and stream base URL all change together,
+   * and the page reads them exactly once at startup.
+   */
+  const rebootAgainstBackend = async (): Promise<void> => {
+    navigation = undefined
+    await navigateMain(applicationUrl)
+  }
+
+  ipcMain.handle(DESKTOP_IPC.backendStatus, (event) => {
+    assertProductSender(event)
+    return backendStatus()
+  })
+
+  ipcMain.handle(DESKTOP_IPC.backendConnect, async (event, request: unknown) => {
+    assertProductSender(event)
+    if (typeof request !== 'object' || request === null) throw new Error('desktop backend: the target must be an object')
+    const fields = request as Record<string, unknown>
+    if (typeof fields.url !== 'string') throw new Error('desktop backend: the target needs a URL')
+    const url = fields.url
+    await startup
+    const operation = backendSwitch.then(async () => {
+      const previous = remoteBackend
+      try {
+        const target = await attachRemoteTarget({
+          url,
+          ...(typeof fields.label === 'string' ? { label: fields.label } : {}),
+          ...(typeof fields.authorizePath === 'string' ? { authorizePath: fields.authorizePath } : {}),
+          ...(typeof fields.bootPath === 'string' ? { bootPath: fields.bootPath } : {}),
+        })
+        remoteBackend = target
+        const localVersion = localBackend?.version ?? null
+        const warning = target.version !== null && localVersion !== null && target.version !== localVersion
+          ? `desktop backend: the remote Host runs ${target.version} while this shell is ${localVersion}`
+          : undefined
+        await rebootAgainstBackend()
+        return { ok: true as const, ...(warning === undefined ? {} : { warning }) }
+      } catch (error) {
+        remoteBackend = previous
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
+      }
+    })
+    backendSwitch = operation.then(() => undefined, () => undefined)
+    return operation
+  })
+
+  ipcMain.handle(DESKTOP_IPC.backendDisconnect, async (event) => {
+    assertProductSender(event)
+    const operation = backendSwitch.then(async () => {
+      if (remoteBackend === undefined) return { ok: true as const }
+      const previous = remoteBackend
+      remoteBackend = undefined
+      try {
+        await rebootAgainstBackend()
+        return { ok: true as const }
+      } catch (error) {
+        remoteBackend = previous
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
+      }
+    })
+    backendSwitch = operation.then(() => undefined, () => undefined)
+    return operation
   })
 
   ipcMain.handle(DESKTOP_IPC.bootFailed, (event, message: unknown) => {
@@ -707,17 +787,18 @@ async function main(): Promise<void> {
     return browserGuests.release(event.sender, lease)
   })
 
-  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://127.0.0.1/*'] }, (details, callback) => {
-    if (hostUrl === undefined || hostCookie === undefined || details.webContentsId !== mainWindow?.webContents.id) {
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://127.0.0.1/*', 'ws://localhost/*', 'ws://[::1]/*'] }, (details, callback) => {
+    const active = activeBackend()
+    if (active === undefined || details.webContentsId !== mainWindow?.webContents.id) {
       callback({})
       return
     }
-    const target = new URL(hostUrl)
+    const target = new URL(active.url)
     const requested = new URL(details.url)
     if (requested.host !== target.host) { callback({}); return }
     const headers = Object.fromEntries(Object.entries(details.requestHeaders).map(([name, value]) => [name.toLowerCase(), value]))
     if (headers.origin !== 'dsh-app://app') { callback({ cancel: true }); return }
-    callback({ requestHeaders: { ...headers, origin: target.origin, cookie: hostCookie, 'sec-fetch-site': 'same-origin' } })
+    callback({ requestHeaders: { ...headers, origin: target.origin, cookie: active.cookie, 'sec-fetch-site': 'same-origin' } })
   })
 
   const assertMainApplication = (event: IpcMainInvokeEvent): BrowserWindow => {

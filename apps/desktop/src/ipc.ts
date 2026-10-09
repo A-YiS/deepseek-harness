@@ -13,6 +13,9 @@ export const DESKTOP_IPC = {
   shortcutsChanged: 'dsh-desktop:shortcuts-changed',
   shortcutsRecording: 'dsh-desktop:shortcuts-recording',
   boot: 'dsh-desktop:boot',
+  backendStatus: 'dsh-desktop:backend-status',
+  backendConnect: 'dsh-desktop:backend-connect',
+  backendDisconnect: 'dsh-desktop:backend-disconnect',
   enterWorkspace: 'dsh-desktop:enter-workspace',
   onboardingActive: 'dsh-desktop:onboarding-active',
   onboardingApiKey: 'dsh-desktop:onboarding-api-key',
@@ -84,7 +87,62 @@ export interface DshDesktopProductApi {
     open(): Promise<void>
     subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void
   }
+  readonly backend: DesktopBackendApi
 }
+
+/** Backend selection and switching, exposed to product documents. */
+export interface DesktopBackendApi {
+  /** Which Host the application window currently drives. */
+  status(): Promise<DesktopBackendStatus>
+  /**
+   * Point the application window at another Host and reboot it against that
+   * Host's boot injections. The shell mints the session itself; the document
+   * never sees the credential.
+   * @param request - loopback target description.
+   * @returns acceptance, with a warning when Host versions differ.
+   */
+  connect(request: DesktopBackendRequest): Promise<DesktopBackendConnectResult>
+  /** Return to the Host this shell spawned and reboot the window against it. */
+  disconnect(): Promise<DesktopBackendConnectResult>
+}
+
+/** Renderer-supplied description of the Host to attach to. */
+export interface DesktopBackendRequest {
+  /** Loopback origin of the target Host. */
+  readonly url: string
+  /** Operator-visible name for the target. */
+  readonly label?: string
+  /** Path of the session-authorization route; defaults to the plugin's. */
+  readonly authorizePath?: string
+  /** Path of the boot-injection route; defaults to the plugin's. */
+  readonly bootPath?: string
+}
+
+/** Current backend selection published to the product UI. */
+export interface DesktopBackendStatus {
+  readonly mode: 'local' | 'remote'
+  readonly label?: string
+  readonly version?: string | null
+}
+
+/** One Host the application window can drive, with its credentials. */
+export interface DesktopBackendTarget {
+  /** Upstream origin every non-static application request is forwarded to. */
+  readonly url: string
+  /** Authentication cookie that origin admits. */
+  readonly cookie: string
+  /** Boot injection table this Host would render into its own index. */
+  readonly injections: readonly unknown[]
+  /** Operator-visible name of the target; absent for the spawned local Host. */
+  readonly label?: string
+  /** Host release version reported by the boot handshake, when it knows one. */
+  readonly version?: string | null
+}
+
+/** Decoded result of one backend switch request. */
+export type DesktopBackendConnectResult =
+  | { readonly ok: true; readonly warning?: string }
+  | { readonly ok: false; readonly error: string }
 
 /** Scheme of Desktop-owned application documents. */
 export const SCHEME = 'dsh-app'

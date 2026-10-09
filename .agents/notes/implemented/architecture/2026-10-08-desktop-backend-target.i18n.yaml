@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-08-desktop-backend-target.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-08-desktop-backend-target.md
+/agent-note-desktop-backend-targets:
+  en: d6f12b8a1dc19743
+  zh: b55c62aa68f0d39d
+/agent-note-desktop-backend-targets/problem:
+  en: 15c9cd71bd9fb137
+  zh: e67a663260534b53
+/agent-note-desktop-backend-targets/decision:
+  en: f8a6200834d57f63
+  zh: 76054eb0aff81569
+/agent-note-desktop-backend-targets/alternatives-considered:
+  en: d276875b496bd82f
+  zh: 87b64dcb6743e9f9
+/agent-note-desktop-backend-targets/consequences:
+  en: a8361425a15cc130
+  zh: 0f7ced01f5ef1276

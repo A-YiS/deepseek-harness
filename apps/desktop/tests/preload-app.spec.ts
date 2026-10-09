@@ -43,9 +43,14 @@ it('limits product documents to update status and a native confirmation action',
   const api = electron.contextBridge.exposeInMainWorld.mock.calls.find(([name]) => name === 'dshDesktop')?.[1] as DshDesktopProductApi
   await api.updates.status()
   await api.updates.open()
-  expect(electron.ipcRenderer.invoke.mock.calls).toEqual([[DESKTOP_IPC.updatesStatus], [DESKTOP_IPC.updatesOpen]])
+  await api.backend.status()
+  await api.backend.connect({ url: 'http://127.0.0.1:3080' })
+  await api.backend.disconnect()
+  expect(electron.ipcRenderer.invoke.mock.calls).toEqual([
+    [DESKTOP_IPC.updatesStatus], [DESKTOP_IPC.updatesOpen], [DESKTOP_IPC.backendStatus],
+    [DESKTOP_IPC.backendConnect, { url: 'http://127.0.0.1:3080' }], [DESKTOP_IPC.backendDisconnect],
+  ])
   expect(api).not.toHaveProperty('plugins')
-  expect(api).not.toHaveProperty('backend')
   expect(api.updates).not.toHaveProperty('install')
   const listener = vi.fn()
   const dispose = api.updates.subscribe(listener)

@@ -44,6 +44,10 @@ Windows 在整个运行期间常驻托盘图标。悬停提示为产品名，单
 
 托盘渲染器以底板中心为基准将鲸鱼放大 20%，保留背景和宽高比；应用和安装器图标保持原有比例。
 
+## 后端目标
+
+应用窗口一次只驱动一台 Host。它从本外壳拉起的 Host 进程启动，也可以经产品 API 的 `dshDesktop.backend` 指向另一台 Harness：调用方给出回环 origin 以及用于换取会话与接管启动注入的两条路由，两次交换都在主进程完成，凭据因此从不进入文档。接入与离开都会重载文档，因为启动注入、插件 bundle 行、上游 origin 与流基础地址只在启动时读一次。`backend.status` 上报当前选择，WebSocket 凭据改写读同一个目标。只接受回环 origin：会话 Cookie 绑定其 authority，改写接受同一组回环 authority。目标报告的 Harness 版本不同时只给出警告，不拒绝接入。
+
 ## 关键技术决策
 
 设计师原稿位于 `resources/icon.png` 和 `resources/icon.svg`；平台适配保留鲸鱼与渐变，分别位于 `resources/icon-windows.*` 和 `resources/icon-macos.*`。将各平台 SVG 导出为透明的 1024×1024 PNG。electron-builder 为 Windows 应用、安装程序和卸载程序生成多尺寸 ICO（[Windows 图标要求](https://learn.microsoft.com/en-us/windows/apps/design/iconography/app-icon-construction)）。安装页面在两种主题下使用匹配的图案；卸载程序的欢迎和完成页共用 `installer/assets/uninstaller-sidebar.png`，准备阶段将其转换为 164×314 BMP。
