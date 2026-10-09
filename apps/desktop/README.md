@@ -44,6 +44,10 @@ The confirmation is skipped when the installer restart already confirmed task in
 
 The tray renderer enlarges the whale by 20% around the tile center while preserving the background and aspect ratio; application and installer icons retain their original proportions.
 
+## Backend targets
+
+The application window drives one Host at a time. It starts on the Host process this shell spawned and can be pointed at another Harness through the product API's `dshDesktop.backend`: the caller supplies a loopback origin plus the routes that mint a session and hand over boot injections, and the main process performs both exchanges, so the credential never reaches the document. Attaching or leaving reloads the document, because boot injections, plugin bundle rows, the upstream origin, and the stream base URL are read once at startup. `backend.status` reports the current selection, and the WebSocket credential rewrite keys off the same target. Only loopback origins are accepted: the session cookie is bound to its authority, and the rewrite accepts the same loopback authorities. A target that reports a different Harness version is attached with a warning rather than refused.
+
 ## Key technical decisions
 
 The original artwork lives in `resources/icon.png` and `resources/icon.svg`; platform adaptations retain the whale and gradients in `resources/icon-windows.*` and `resources/icon-macos.*`. Export each platform SVG as a transparent 1024×1024 PNG. Electron-builder generates the multi-size ICO for the Windows application, installer, and uninstaller ([Windows icon requirements](https://learn.microsoft.com/en-us/windows/apps/design/iconography/app-icon-construction)). The installation pages use matching artwork in both themes; the uninstaller's welcome and finish pages share `installer/assets/uninstaller-sidebar.png`, converted to a 164×314 BMP during preparation.
